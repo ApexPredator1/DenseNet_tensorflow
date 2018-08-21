@@ -196,10 +196,11 @@ class DenseNet:
                                  initializer=tf.contrib.layers.variance_scaling_initializer())
         output = tf.nn.conv2d(self.images, kernel, strides=[1, 1, 1, 1], padding='SAME')
         temp = output
+
         # 添加total_blocks个block
         for block in range(self.total_blocks):
             for layer in range(layers_per_block):
-                if not self.bc_mode:
+                if not self.bc_mode:    # 没有bottleneck层
                     output = tf.contrib.layers.batch_norm(temp, scale=True, is_training=self.is_training,
                                                           updates_collections=None)
                     output = tf.nn.relu(output)
@@ -209,8 +210,7 @@ class DenseNet:
                     output = tf.nn.conv2d(output, kernel, [1, 1, 1, 1], padding='SAME')
                     output = tf.cond(self.is_training, lambda: tf.nn.dropout(output, self.keep_prob),
                                      lambda: output)
-                elif self.bc_mode:
-                    # bottleneck层
+                elif self.bc_mode:      # 带有bottleneck层
                     output = tf.contrib.layers.batch_norm(temp, scale=True, is_training=self.is_training,
                                                           updates_collections=None)
                     output = tf.nn.relu(output)
