@@ -195,42 +195,47 @@ class DenseNet:
                                  shape=[3, 3, int(self.images.get_shape()[-1]), self.first_output_features],
                                  initializer=tf.contrib.layers.variance_scaling_initializer())
         output = tf.nn.conv2d(self.images, kernel, strides=[1, 1, 1, 1], padding='SAME')
-        temp = output
 
         # 添加total_blocks个block
         for block in range(self.total_blocks):
+            layer_input = output       # layer_input用于更新迭代一个block中每个层的输入，其初始值output是每个block的输出
+            # a1层的输入是input
+            # a2层的输入是input+a1
+            # a3层的输入是input+a1+a2
+            # a4层的输入是input+a1+a2+a3
+            # ............. 依次迭代
             for layer in range(layers_per_block):
                 if not self.bc_mode:    # 没有bottleneck层
-                    output = tf.contrib.layers.batch_norm(temp, scale=True, is_training=self.is_training,
+                    # 直接BN+ReLU+3*3卷积层
+                    output = tf.contrib.layers.batch_norm(layer_input, scale=True, is_training=self.is_training,
                                                           updates_collections=None)
                     output = tf.nn.relu(output)
                     kernel = tf.get_variable(name='kernel_$d_%d' % (block, layer),
                                              shape=[3, 3, int(output.get_shape()[-1]), growth_rate],
                                              initializer=tf.contrib.layers.variance_scaling_initializer())
                     output = tf.nn.conv2d(output, kernel, [1, 1, 1, 1], padding='SAME')
-                    output = tf.cond(self.is_training, lambda: tf.nn.dropout(output, self.keep_prob),
-                                     lambda: output)
+                    output = tf.cond(self.is_training, lambda: tf.nn.dropout(output, self.keep_prob), lambda: output)
                 elif self.bc_mode:      # 带有bottleneck层
-                    output = tf.contrib.layers.batch_norm(temp, scale=True, is_training=self.is_training,
+                    # BN+ReLU+1*1卷积层
+                    output = tf.contrib.layers.batch_norm(layer_input, scale=True, is_training=self.is_training,
                                                           updates_collections=None)
                     output = tf.nn.relu(output)
                     kernel = tf.get_variable(name='kernel_$d_%d' % (block, layer),
                                              shape=[1, 1, int(output.get_shape()[-1]), growth_rate * 4],
                                              initializer=tf.contrib.layers.variance_scaling_initializer())
                     output = tf.nn.conv2d(output, kernel, [1, 1, 1, 1], padding='VALID')
-                    output = tf.cond(self.is_training, lambda: tf.nn.dropout(output, self.keep_prob),
-                                     lambda: output)
+                    output = tf.cond(self.is_training, lambda: tf.nn.dropout(output, self.keep_prob), lambda: output)
 
-                output = tf.contrib.layers.batch_norm(output, scale=True, is_training=self.is_training,
-                                                      updates_collections=None)
-                output = tf.nn.relu(output)
-                kernel = tf.get_variable(name='kernel_$d_%d' % (block, layer),
-                                         shape=[3, 3, int(output.get_shape()[-1]), growth_rate],
-                                         initializer=tf.contrib.layers.variance_scaling_initializer())
-                output = tf.nn.conv2d(output, kernel, [1, 1, 1, 1], padding='SAME')
-                output = tf.cond(self.is_training, lambda: tf.nn.dropout(output, self.keep_prob),
-                                 lambda: output)
-                output = tf.concat(values=(temp, output), axis=3)
+                    # BN+ReLU+3*3卷积层
+                    output = tf.contrib.layers.batch_norm(output, scale=True, is_training=self.is_training,
+                                                          updates_collections=None)
+                    output = tf.nn.relu(output)
+                    kernel = tf.get_variable(name='kernel_$d_%d' % (block, layer),
+                                             shape=[3, 3, int(output.get_shape()[-1]), growth_rate],
+                                             initializer=tf.contrib.layers.variance_scaling_initializer())
+                    output = tf.nn.conv2d(output, kernel, [1, 1, 1, 1], padding='SAME')
+                    output = tf.cond(self.is_training, lambda: tf.nn.dropout(output, self.keep_prob), lambda: output)
+                layer_input = tf.concat(values=(layer_input, output), axis=-1)
 
             # 除了最后一个block，都有transition层
             if block != self.total_blocks - 1:
@@ -243,7 +248,6 @@ class DenseNet:
                                          initializer=tf.contrib.layers.variance_scaling_initializer())
                 output = tf.nn.conv2d(output, kernel, [1, 1, 1, 1], padding='SAME')
                 output = tf.cond(self.is_training, lambda: tf.nn.dropout(output, self.keep_prob), lambda: output)
-
                 output = tf.nn.avg_pool(output, ksize=[1, 2, 2, 1], strides=[1, 2, 2, 1], padding='VALID')
 
         # 最后一个block后面的全局平均池化
@@ -258,7 +262,7 @@ class DenseNet:
         W = tf.get_variable(name='W', shape=[features_total, self.n_classes],
                             initializer=tf.contrib.layers.xavier_initializer())
         bias = tf.get_variable('bias', initializer=tf.constant(0.0, shape=[self.n_classes]))
-        logits = tf.matmul(output, W) + bias
+        logits = tf.nn.bias_add(tf.matmul(output, W), bias)
 
         prediction = tf.nn.softmax(logits)
         cross_entropy = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=logits, labels=self.labels))
